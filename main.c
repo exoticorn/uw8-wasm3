@@ -68,7 +68,18 @@ void linkSystemFunctions(IM3Runtime runtime, IM3Module mod) {
 }
 
 m3ApiRawFunction(platformTrampoline) {
-  fprintf(stderr, "Trampoline not yet implemented\n");
+  IM3Function func = (IM3Function)_ctx->userdata;
+  uint32_t retCount = m3_GetRetCount(func);
+  uint32_t argCount = m3_GetArgCount(func);
+  const void* args[16];
+  for(uint32_t i = 0; i < argCount; ++i) {
+    args[i] = &_sp[retCount + i];
+  }
+  verifyM3(runtime, m3_Call(func, m3_GetArgCount(func), args));
+  for(uint32_t i = 0; i < retCount; ++i) {
+    args[i] = &_sp[i];
+  }
+  verifyM3(runtime, m3_GetResults(func, retCount, args));
   m3ApiSuccess();
 }
 
