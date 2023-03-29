@@ -46,7 +46,7 @@ m3ApiRawFunction(nopFunc) {
   m3ApiSuccess();
 }
 
-void linkSystemFunctions(IM3Module mod) {
+void linkSystemFunctions(IM3Runtime runtime, IM3Module mod) {
   m3_LinkRawFunctionEx(mod, "env", "acos", "f(f)", math1, acosf);
   m3_LinkRawFunctionEx(mod, "env", "asin", "f(f)", math1, asinf);
   m3_LinkRawFunctionEx(mod, "env", "atan", "f(f)", math1, atanf);
@@ -64,6 +64,46 @@ void linkSystemFunctions(IM3Module mod) {
     char name[128];
     sprintf(name, "reserved%d", i);
     m3_LinkRawFunction(mod, "env", name, "v()", nopFunc);
+  }
+}
+
+m3ApiRawFunction(platformTrampoline) {
+  fprintf(stderr, "Trampoline not yet implemented\n");
+  m3ApiSuccess();
+}
+
+void appendType(char* signature, M3ValueType type) {
+  if(type == c_m3Type_i32) {
+    strcat(signature, "i");
+  } else if(type == c_m3Type_i64) {
+    strcat(signature, "l");
+  } else if(type == c_m3Type_f32) {
+    strcat(signature, "f");
+  } else {
+    fprintf(stderr, "Unsupported platform type %d\n", type);
+    exit(1);
+  }
+}
+
+void linkPlatformFunctions(IM3Runtime runtime, IM3Module cartMod, IM3Module platformMod) {
+  for(u32 functionIndex = 0; functionIndex < platformMod->numFunctions; ++functionIndex) {
+    M3Function function = platformMod->functions[functionIndex];
+    if(function.export_name != NULL) {
+      IM3Function iFunc;
+      verifyM3(runtime, m3_FindFunction(&iFunc, runtime, function.export_name));
+      char signature[128] = { 0 };
+      if(m3_GetRetCount(iFunc) > 0) {
+        appendType(signature, m3_GetRetType(iFunc, 0));
+      } else {
+        strcat(signature, "v");
+      }
+      strcat(signature, "(");
+      for(uint32_t i = 0; i < m3_GetArgCount(iFunc); ++i) {
+        appendType(signature, m3_GetArgType(iFunc, i));
+      }
+      strcat(signature, ")");
+      m3_LinkRawFunctionEx(cartMod, "env", function.export_name, signature, platformTrampoline, iFunc);
+    }
   }
 }
 
@@ -110,7 +150,7 @@ int main() {
   verifyM3(runtime, m3_ParseModule(env, &platformMod, platformWasm, platformSize));
   platformMod->memoryImported = true;
   verifyM3(runtime, m3_LoadModule(runtime, platformMod));
-  linkSystemFunctions(platformMod);
+  linkSystemFunctions(runtime, platformMod);
   verifyM3(runtime, m3_CompileModule(platformMod));
   verifyM3(runtime, m3_RunStart(platformMod));
 
@@ -118,9 +158,14 @@ int main() {
   verifyM3(runtime, m3_ParseModule(env, &cartMod, cartWasm, cartSize));
   platformMod->memoryImported = true;
   verifyM3(runtime, m3_LoadModule(runtime, cartMod));
-  linkSystemFunctions(cartMod);
+  linkSystemFunctions(runtime, cartMod);
+  linkPlatformFunctions(runtime, cartMod, platformMod);
   verifyM3(runtime, m3_CompileModule(cartMod));
   verifyM3(runtime, m3_RunStart(cartMod));
+
+  IM3Function updFunc;
+  verifyM3(runtime, m3_FindFunction(&updFunc, runtime, "upd"));
+  verifyM3(runtime, m3_CallV(updFunc));
 
   return 0;
 }
