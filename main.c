@@ -75,6 +75,7 @@ void* loadUw8(uint32_t* sizeOut, IM3Runtime runtime, IM3Function loadFunc, uint8
   verifyM3(runtime, m3_GetResultsV(loadFunc, sizeOut));
   void* wasm = malloc(*sizeOut);
   memcpy(wasm, memory, *sizeOut);
+  return wasm;
 }
 
 int main() {
@@ -93,6 +94,7 @@ int main() {
   verifyM3(runtime, m3_ParseModule(env, &loaderMod, loaderWasm, loaderSize));
   loaderMod->memoryImported = true;
   verifyM3(runtime, m3_LoadModule(runtime, loaderMod));
+  verifyM3(runtime, m3_CompileModule(loaderMod));
   verifyM3(runtime, m3_RunStart(loaderMod));
 
   IM3Function loadFunc;
@@ -100,15 +102,25 @@ int main() {
 
   uint32_t platformSize;
   void* platformWasm = loadUw8(&platformSize, runtime, loadFunc, memory, "platform.uw8");
-  printf("platform size: %u\n", platformSize);
-  printf("First byte: %u\n", memory[0]);
+
+  uint32_t cartSize;
+  void* cartWasm = loadUw8(&cartSize, runtime, loadFunc, memory, "never_sleeps.uw8");
 
   IM3Module platformMod;
   verifyM3(runtime, m3_ParseModule(env, &platformMod, platformWasm, platformSize));
   platformMod->memoryImported = true;
   verifyM3(runtime, m3_LoadModule(runtime, platformMod));
   linkSystemFunctions(platformMod);
+  verifyM3(runtime, m3_CompileModule(platformMod));
   verifyM3(runtime, m3_RunStart(platformMod));
+
+  IM3Module cartMod;
+  verifyM3(runtime, m3_ParseModule(env, &cartMod, cartWasm, cartSize));
+  platformMod->memoryImported = true;
+  verifyM3(runtime, m3_LoadModule(runtime, cartMod));
+  linkSystemFunctions(cartMod);
+  verifyM3(runtime, m3_CompileModule(cartMod));
+  verifyM3(runtime, m3_RunStart(cartMod));
 
   return 0;
 }
