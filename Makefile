@@ -11,9 +11,12 @@ wasm3-test: main.o $(WASM3_O)
 	gcc -g -lm -o wasm3-test $^
 
 wasm3/source/%.o: wasm3/source/%.c
-	gcc -g -c -o $@ $^
+	gcc -g -DDEBUG=1 -c -o $@ $^
 
 main.o: main.c
-	gcc -g -c -o main.o main.c
+	gcc -g -DDEBUG=1 -c -o main.o main.c
+
+clean:
+	rm wasm3-test main.o $(WASM3_O)
 
 .PHONY:

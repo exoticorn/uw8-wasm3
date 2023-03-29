@@ -1,5 +1,6 @@
 #include "wasm3/source/wasm3.h"
 #include "wasm3/source/m3_env.h"
+#include <math.h>
 #include <stdio.h>
 #include <malloc.h>
 
@@ -17,18 +18,70 @@ void* loadFile(size_t* sizeOut, const char* filename) {
   return buffer;
 }
 
-void verifyM3(M3Result result) {
-  if(result != NULL) {
-    fprintf(stderr, "Error: %s\n", result);
+void verifyM3(IM3Runtime runtime, M3Result result) {
+  if (result != m3Err_none) {
+    M3ErrorInfo info;
+    m3_GetErrorInfo(runtime, &info);
+    fprintf(stderr, "WASM error: %s (%s)\n", result, info.message);
     exit(1);
   }
+}
+
+m3ApiRawFunction(math1) {
+  m3ApiReturnType(float);
+  m3ApiGetArg(float, v);
+  *raw_return = ((float(*)(float))_ctx->userdata)(v);
+  m3ApiSuccess();
+}
+
+m3ApiRawFunction(math2) {
+  m3ApiReturnType(float);
+  m3ApiGetArg(float, a);
+  m3ApiGetArg(float, b);
+  *raw_return = ((float(*)(float, float))_ctx->userdata)(a, b);
+  m3ApiSuccess();
+}
+
+m3ApiRawFunction(nopFunc) {
+  m3ApiSuccess();
+}
+
+void linkSystemFunctions(IM3Module mod) {
+  m3_LinkRawFunctionEx(mod, "env", "acos", "f(f)", math1, acosf);
+  m3_LinkRawFunctionEx(mod, "env", "asin", "f(f)", math1, asinf);
+  m3_LinkRawFunctionEx(mod, "env", "atan", "f(f)", math1, atanf);
+  m3_LinkRawFunctionEx(mod, "env", "atan2", "f(ff)", math2, atan2f);
+  m3_LinkRawFunctionEx(mod, "env", "cos", "f(f)", math1, cosf);
+  m3_LinkRawFunctionEx(mod, "env", "exp", "f(f)", math1, expf);
+  m3_LinkRawFunctionEx(mod, "env", "log", "f(f)", math1, logf);
+  m3_LinkRawFunctionEx(mod, "env", "sin", "f(f)", math1, sinf);
+  m3_LinkRawFunctionEx(mod, "env", "tan", "f(f)", math1, tanf);
+  m3_LinkRawFunctionEx(mod, "env", "pow", "f(ff)", math2, powf);
+
+  m3_LinkRawFunction(mod, "env", "logChar", "v(i)", nopFunc);
+
+  for(int i = 9; i < 64; ++i) {
+    char name[128];
+    sprintf(name, "reserved%d", i);
+    m3_LinkRawFunction(mod, "env", name, "v()", nopFunc);
+  }
+}
+
+void* loadUw8(uint32_t* sizeOut, IM3Runtime runtime, IM3Function loadFunc, uint8_t* memory, const char* filename) {
+  size_t uw8Size;
+  void* uw8 = loadFile(&uw8Size, filename);
+  memcpy(memory, uw8, uw8Size);
+  verifyM3(runtime, m3_CallV(loadFunc, (uint32_t)uw8Size));
+  verifyM3(runtime, m3_GetResultsV(loadFunc, sizeOut));
+  void* wasm = malloc(*sizeOut);
+  memcpy(wasm, memory, *sizeOut);
 }
 
 int main() {
   IM3Environment env = m3_NewEnvironment();
   IM3Runtime runtime = m3_NewRuntime(env, 16384, NULL);
   runtime->memory.maxPages = 4;
-  verifyM3(ResizeMemory(runtime, 4));
+  verifyM3(runtime, ResizeMemory(runtime, 4));
 
   uint8_t* memory = m3_GetMemory(runtime, NULL, 0);
   assert(memory != NULL);
@@ -37,27 +90,25 @@ int main() {
   void* loaderWasm = loadFile(&loaderSize, "loader.wasm");
 
   IM3Module loaderMod;
-  verifyM3(m3_ParseModule(env, &loaderMod, loaderWasm, loaderSize));
+  verifyM3(runtime, m3_ParseModule(env, &loaderMod, loaderWasm, loaderSize));
   loaderMod->memoryImported = true;
-  verifyM3(m3_LoadModule(runtime, loaderMod));
+  verifyM3(runtime, m3_LoadModule(runtime, loaderMod));
+  verifyM3(runtime, m3_RunStart(loaderMod));
 
-  size_t platformUw8Size;
-  void* platformUw8 = loadFile(&platformUw8Size, "platform.uw8");
-  memcpy(memory, platformUw8, platformUw8Size);
-  printf("platform.uw8 size: %u\n", (unsigned int)platformUw8Size);
+  IM3Function loadFunc;
+  verifyM3(runtime, m3_FindFunction(&loadFunc, runtime, "load_uw8"));
 
-  IM3Function loadUw8;
-  verifyM3(m3_FindFunction(&loadUw8, runtime, "load_uw8"));
-  verifyM3(m3_CallV(loadUw8, (uint32_t)platformUw8Size));
   uint32_t platformSize;
-  verifyM3(m3_GetResultsV(loadUw8, &platformSize));
+  void* platformWasm = loadUw8(&platformSize, runtime, loadFunc, memory, "platform.uw8");
   printf("platform size: %u\n", platformSize);
   printf("First byte: %u\n", memory[0]);
 
   IM3Module platformMod;
-  verifyM3(m3_ParseModule(env, &platformMod, memory, platformSize));
+  verifyM3(runtime, m3_ParseModule(env, &platformMod, platformWasm, platformSize));
   platformMod->memoryImported = true;
-  verifyM3(m3_LoadModule(runtime, platformMod));
+  verifyM3(runtime, m3_LoadModule(runtime, platformMod));
+  linkSystemFunctions(platformMod);
+  verifyM3(runtime, m3_RunStart(platformMod));
 
   return 0;
 }
