@@ -1,5 +1,8 @@
 #include "wasm3/source/wasm3.h"
 #include "wasm3/source/m3_env.h"
+#include "SDL2/SDL.h"
+#include "SDL2/SDL_video.h"
+#include "SDL2/SDL_render.h"
 #include <math.h>
 #include <stdio.h>
 #include <malloc.h>
@@ -174,9 +177,40 @@ int main() {
   verifyM3(runtime, m3_CompileModule(cartMod));
   verifyM3(runtime, m3_RunStart(cartMod));
 
-  IM3Function updFunc;
-  verifyM3(runtime, m3_FindFunction(&updFunc, runtime, "upd"));
-  verifyM3(runtime, m3_CallV(updFunc));
+  SDL_Init(SDL_INIT_VIDEO);
+  SDL_Window* window;
+  SDL_Renderer* renderer;
+  SDL_CreateWindowAndRenderer(320, 240, SDL_WINDOW_RESIZABLE, &window, &renderer);
+  SDL_RenderSetLogicalSize(renderer, 320, 240);
+  SDL_Texture* texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, 320, 240);
+
+  uint32_t* pixels32 = malloc(320*240*4);
+
+  for(uint32_t time = 0;; time += 16) {
+    SDL_Event event;
+    while(SDL_PollEvent(&event)) {
+      switch(event.type) {
+      case SDL_QUIT:
+        exit(0);
+      }
+    }
+
+    *(uint32_t*)(memory + 64) = time;
+    
+    IM3Function updFunc;
+    verifyM3(runtime, m3_FindFunction(&updFunc, runtime, "upd"));
+    verifyM3(runtime, m3_CallV(updFunc));
+
+    uint32_t* palette = (uint32_t*)(memory + 0x13000);
+    uint8_t* pixels = memory + 120;
+    for(uint32_t i = 0; i < 320*240; ++i) {
+      pixels32[i] = palette[pixels[i]];
+    }
+    SDL_UpdateTexture(texture, NULL, pixels32, 320*4);
+    SDL_RenderClear(renderer);
+    SDL_RenderCopy(renderer, texture, NULL, NULL);
+    SDL_RenderPresent(renderer);
+  }
 
   return 0;
 }
