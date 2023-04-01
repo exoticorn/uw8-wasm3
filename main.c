@@ -138,6 +138,34 @@ const uint32_t uw8buttonScanCodes[] = {
   SDL_SCANCODE_Z, SDL_SCANCODE_X, SDL_SCANCODE_A, SDL_SCANCODE_S
 };
 
+typedef struct {
+  IM3Runtime runtime;
+  IM3Module platform;
+  IM3Module cart;
+} Uw8Runtime;
+
+void initRuntime(Uw8Runtime* runtime, IM3Environment env,
+                 void* platform, size_t platformSize, void* cart, size_t cartSize) {
+  runtime->runtime = m3_NewRuntime(env, 65536, NULL);
+  runtime->runtime->memory.maxPages = 4;
+  verifyM3(runtime->runtime, ResizeMemory(runtime->runtime, 4));
+
+  verifyM3(runtime->runtime, m3_ParseModule(env, &runtime->platform, platform, platformSize));
+  runtime->platform->memoryImported = true;
+  verifyM3(runtime->runtime, m3_LoadModule(runtime->runtime, runtime->platform));
+  linkSystemFunctions(runtime->runtime, runtime->platform);
+  verifyM3(runtime->runtime, m3_CompileModule(runtime->platform));
+  verifyM3(runtime->runtime, m3_RunStart(runtime->platform));
+
+  verifyM3(runtime->runtime, m3_ParseModule(env, &runtime->cart, cart, cartSize));
+  runtime->platform->memoryImported = true;
+  verifyM3(runtime->runtime, m3_LoadModule(runtime->runtime, runtime->cart));
+  linkSystemFunctions(runtime->runtime, runtime->cart);
+  linkPlatformFunctions(runtime->runtime, runtime->cart, runtime->platform);
+  verifyM3(runtime->runtime, m3_CompileModule(runtime->cart));
+  verifyM3(runtime->runtime, m3_RunStart(runtime->cart));
+}
+
 int main(int argc, const char** argv) {
   if(argc != 2) {
     fprintf(stderr, "Usage: uw8-wasm3 <UW8-MODULE>\n");
@@ -177,31 +205,18 @@ int main(int argc, const char** argv) {
   uint32_t cartSize;
   void* cartWasm = loadUw8(&cartSize, loaderRuntime, loadFunc, argv[1]);
 
+  m3_FreeRuntime(loaderRuntime);
+
   bool quit = false;
   while(!quit) {
-    IM3Runtime runtime = m3_NewRuntime(env, 16384, NULL);
-    runtime->memory.maxPages = 4;
-    verifyM3(runtime, ResizeMemory(runtime, 4));
+    Uw8Runtime runtime;
+    initRuntime(&runtime, env, platformWasm, platformSize, cartWasm, cartSize);
 
-    uint8_t* memory = m3_GetMemory(runtime, NULL, 0);
+    uint8_t* memory = m3_GetMemory(runtime.runtime, NULL, 0);
     assert(memory != NULL);
 
-    IM3Module platformMod;
-    verifyM3(runtime, m3_ParseModule(env, &platformMod, platformWasm, platformSize));
-    platformMod->memoryImported = true;
-    verifyM3(runtime, m3_LoadModule(runtime, platformMod));
-    linkSystemFunctions(runtime, platformMod);
-    verifyM3(runtime, m3_CompileModule(platformMod));
-    verifyM3(runtime, m3_RunStart(platformMod));
-
-    IM3Module cartMod;
-    verifyM3(runtime, m3_ParseModule(env, &cartMod, cartWasm, cartSize));
-    platformMod->memoryImported = true;
-    verifyM3(runtime, m3_LoadModule(runtime, cartMod));
-    linkSystemFunctions(runtime, cartMod);
-    linkPlatformFunctions(runtime, cartMod, platformMod);
-    verifyM3(runtime, m3_CompileModule(cartMod));
-    verifyM3(runtime, m3_RunStart(cartMod));
+    IM3Function updFunc;
+    verifyM3(runtime.runtime, m3_FindFunction(&updFunc, runtime.runtime, "upd"));
 
     uint32_t startTime = SDL_GetTicks();
 
@@ -239,9 +254,7 @@ int main(int argc, const char** argv) {
       }
       memory[0x44] = buttons;
     
-      IM3Function updFunc;
-      verifyM3(runtime, m3_FindFunction(&updFunc, runtime, "upd"));
-      verifyM3(runtime, m3_CallV(updFunc));
+      verifyM3(runtime.runtime, m3_CallV(updFunc));
 
       uint32_t* palette = (uint32_t*)(memory + 0x13000);
       uint8_t* pixels = memory + 120;
@@ -262,7 +275,7 @@ int main(int argc, const char** argv) {
       }
     }
 
-    m3_FreeRuntime(runtime);
+    m3_FreeRuntime(runtime.runtime);
   }
 
   return 0;
