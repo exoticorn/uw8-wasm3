@@ -121,9 +121,10 @@ void linkPlatformFunctions(IM3Runtime runtime, IM3Module cartMod, IM3Module plat
   }
 }
 
-void* loadUw8(uint32_t* sizeOut, IM3Runtime runtime, IM3Function loadFunc, uint8_t* memory, const char* filename) {
+void* loadUw8(uint32_t* sizeOut, IM3Runtime runtime, IM3Function loadFunc, const char* filename) {
   size_t uw8Size;
   void* uw8 = loadFile(&uw8Size, filename);
+  uint8_t* memory = m3_GetMemory(runtime, NULL, 0);
   memcpy(memory, uw8, uw8Size);
   verifyM3(runtime, m3_CallV(loadFunc, (uint32_t)uw8Size));
   verifyM3(runtime, m3_GetResultsV(loadFunc, sizeOut));
@@ -132,84 +133,136 @@ void* loadUw8(uint32_t* sizeOut, IM3Runtime runtime, IM3Function loadFunc, uint8
   return wasm;
 }
 
-int main() {
-  IM3Environment env = m3_NewEnvironment();
-  IM3Runtime runtime = m3_NewRuntime(env, 16384, NULL);
-  runtime->memory.maxPages = 4;
-  verifyM3(runtime, ResizeMemory(runtime, 4));
+const uint32_t uw8buttonScanCodes[] = {
+  SDL_SCANCODE_UP, SDL_SCANCODE_DOWN, SDL_SCANCODE_LEFT, SDL_SCANCODE_RIGHT,
+  SDL_SCANCODE_Z, SDL_SCANCODE_X, SDL_SCANCODE_A, SDL_SCANCODE_S
+};
 
-  uint8_t* memory = m3_GetMemory(runtime, NULL, 0);
-  assert(memory != NULL);
+int main(int argc, const char** argv) {
+  if(argc != 2) {
+    fprintf(stderr, "Usage: uw8-wasm3 <UW8-MODULE>\n");
+    return 1;
+  }
 
-  size_t loaderSize;
-  void* loaderWasm = loadFile(&loaderSize, "loader.wasm");
-
-  IM3Module loaderMod;
-  verifyM3(runtime, m3_ParseModule(env, &loaderMod, loaderWasm, loaderSize));
-  loaderMod->memoryImported = true;
-  verifyM3(runtime, m3_LoadModule(runtime, loaderMod));
-  verifyM3(runtime, m3_CompileModule(loaderMod));
-  verifyM3(runtime, m3_RunStart(loaderMod));
-
-  IM3Function loadFunc;
-  verifyM3(runtime, m3_FindFunction(&loadFunc, runtime, "load_uw8"));
-
-  uint32_t platformSize;
-  void* platformWasm = loadUw8(&platformSize, runtime, loadFunc, memory, "platform.uw8");
-
-  uint32_t cartSize;
-  void* cartWasm = loadUw8(&cartSize, runtime, loadFunc, memory, "never_sleeps.uw8");
-
-  IM3Module platformMod;
-  verifyM3(runtime, m3_ParseModule(env, &platformMod, platformWasm, platformSize));
-  platformMod->memoryImported = true;
-  verifyM3(runtime, m3_LoadModule(runtime, platformMod));
-  linkSystemFunctions(runtime, platformMod);
-  verifyM3(runtime, m3_CompileModule(platformMod));
-  verifyM3(runtime, m3_RunStart(platformMod));
-
-  IM3Module cartMod;
-  verifyM3(runtime, m3_ParseModule(env, &cartMod, cartWasm, cartSize));
-  platformMod->memoryImported = true;
-  verifyM3(runtime, m3_LoadModule(runtime, cartMod));
-  linkSystemFunctions(runtime, cartMod);
-  linkPlatformFunctions(runtime, cartMod, platformMod);
-  verifyM3(runtime, m3_CompileModule(cartMod));
-  verifyM3(runtime, m3_RunStart(cartMod));
-
-  SDL_Init(SDL_INIT_VIDEO);
+  SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO);
   SDL_Window* window;
   SDL_Renderer* renderer;
-  SDL_CreateWindowAndRenderer(320, 240, SDL_WINDOW_RESIZABLE, &window, &renderer);
+  SDL_CreateWindowAndRenderer(640, 480, SDL_WINDOW_RESIZABLE, &window, &renderer);
   SDL_RenderSetLogicalSize(renderer, 320, 240);
   SDL_Texture* texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, 320, 240);
 
   uint32_t* pixels32 = malloc(320*240*4);
 
-  for(uint32_t time = 0;; time += 16) {
-    SDL_Event event;
-    while(SDL_PollEvent(&event)) {
-      switch(event.type) {
-      case SDL_QUIT:
-        exit(0);
+  IM3Environment env = m3_NewEnvironment();
+  IM3Runtime loaderRuntime = m3_NewRuntime(env, 65536, NULL);
+  loaderRuntime->memory.maxPages = 4;
+  verifyM3(loaderRuntime, ResizeMemory(loaderRuntime, 4));
+
+  size_t loaderSize;
+  void* loaderWasm = loadFile(&loaderSize, "loader.wasm");
+
+  IM3Module loaderMod;
+  verifyM3(loaderRuntime, m3_ParseModule(env, &loaderMod, loaderWasm, loaderSize));
+  loaderMod->memoryImported = true;
+  verifyM3(loaderRuntime, m3_LoadModule(loaderRuntime, loaderMod));
+  verifyM3(loaderRuntime, m3_CompileModule(loaderMod));
+  verifyM3(loaderRuntime, m3_RunStart(loaderMod));
+
+  IM3Function loadFunc;
+  verifyM3(loaderRuntime, m3_FindFunction(&loadFunc, loaderRuntime, "load_uw8"));
+
+  uint32_t platformSize;
+  void* platformWasm = loadUw8(&platformSize, loaderRuntime, loadFunc, "platform.uw8");
+
+  uint32_t cartSize;
+  void* cartWasm = loadUw8(&cartSize, loaderRuntime, loadFunc, argv[1]);
+
+  bool quit = false;
+  while(!quit) {
+    IM3Runtime runtime = m3_NewRuntime(env, 16384, NULL);
+    runtime->memory.maxPages = 4;
+    verifyM3(runtime, ResizeMemory(runtime, 4));
+
+    uint8_t* memory = m3_GetMemory(runtime, NULL, 0);
+    assert(memory != NULL);
+
+    IM3Module platformMod;
+    verifyM3(runtime, m3_ParseModule(env, &platformMod, platformWasm, platformSize));
+    platformMod->memoryImported = true;
+    verifyM3(runtime, m3_LoadModule(runtime, platformMod));
+    linkSystemFunctions(runtime, platformMod);
+    verifyM3(runtime, m3_CompileModule(platformMod));
+    verifyM3(runtime, m3_RunStart(platformMod));
+
+    IM3Module cartMod;
+    verifyM3(runtime, m3_ParseModule(env, &cartMod, cartWasm, cartSize));
+    platformMod->memoryImported = true;
+    verifyM3(runtime, m3_LoadModule(runtime, cartMod));
+    linkSystemFunctions(runtime, cartMod);
+    linkPlatformFunctions(runtime, cartMod, platformMod);
+    verifyM3(runtime, m3_CompileModule(cartMod));
+    verifyM3(runtime, m3_RunStart(cartMod));
+
+    uint32_t startTime = SDL_GetTicks();
+
+    bool restart = false;
+    while(!quit && !restart) {
+      SDL_Event event;
+      while(SDL_PollEvent(&event)) {
+        switch(event.type) {
+          case SDL_QUIT:
+            quit = true;
+            break;
+          case SDL_KEYDOWN:
+            switch(event.key.keysym.sym) {
+              case SDLK_ESCAPE:
+                quit = true;
+                break;
+              case SDLK_r:
+                restart = true;
+                break;
+            }
+            break;
+        }
+      }
+
+      uint32_t time = SDL_GetTicks() - startTime;
+      *(uint32_t*)(memory + 64) = time;
+
+      int numKeys;
+      const Uint8* keyState = SDL_GetKeyboardState(&numKeys);
+      uint8_t buttons = 0;
+      for(int i = 0; i < 8; ++i) {
+        if(keyState[uw8buttonScanCodes[i]]) {
+          buttons |= 1 << i;
+        }
+      }
+      memory[0x44] = buttons;
+    
+      IM3Function updFunc;
+      verifyM3(runtime, m3_FindFunction(&updFunc, runtime, "upd"));
+      verifyM3(runtime, m3_CallV(updFunc));
+
+      uint32_t* palette = (uint32_t*)(memory + 0x13000);
+      uint8_t* pixels = memory + 120;
+      for(uint32_t i = 0; i < 320*240; ++i) {
+        pixels32[i] = palette[pixels[i]];
+      }
+      SDL_UpdateTexture(texture, NULL, pixels32, 320*4);
+      SDL_RenderClear(renderer);
+      SDL_RenderCopy(renderer, texture, NULL, NULL);
+      SDL_RenderPresent(renderer);
+
+      uint32_t frame = (uint32_t)((uint64_t)time * 60 / 1000);
+      uint32_t offset = time - (uint32_t)((uint64_t)frame * 1000 / 60);
+      uint32_t nextFrameTime = (uint32_t)((uint64_t)(frame + 1) * 1000 / 60 + (offset < 4 ? offset : 4));
+      uint32_t delay = startTime + nextFrameTime - SDL_GetTicks();
+      if(delay < 33) {
+        SDL_Delay(delay);
       }
     }
 
-    *(uint32_t*)(memory + 64) = time;
-    
-    IM3Function updFunc;
-    verifyM3(runtime, m3_FindFunction(&updFunc, runtime, "upd"));
-    verifyM3(runtime, m3_CallV(updFunc));
-
-    uint32_t* palette = (uint32_t*)(memory + 0x13000);
-    uint8_t* pixels = memory + 120;
-    for(uint32_t i = 0; i < 320*240; ++i) {
-      pixels32[i] = palette[pixels[i]];
-    }
-    SDL_UpdateTexture(texture, NULL, pixels32, 320*4);
-    SDL_RenderClear(renderer);
-    SDL_RenderCopy(renderer, texture, NULL, NULL);
-    SDL_RenderPresent(renderer);
+    m3_FreeRuntime(runtime);
   }
 
   return 0;
