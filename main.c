@@ -166,6 +166,25 @@ void initRuntime(Uw8Runtime* runtime, IM3Environment env,
   verifyM3(runtime->runtime, m3_RunStart(runtime->cart));
 }
 
+typedef struct AudioState {
+  Uw8Runtime runtime;
+  uint8_t* memory;
+  IM3Function snd;
+  uint8_t registers[32];
+  uint32_t sampleIndex;
+} AudioState;
+
+void audioCallback(void* userdata, Uint8* stream, int len) {
+  AudioState* state = (AudioState*)userdata;
+  float* samples = (float*)stream;
+  int numSamples = len / sizeof(float);
+  memcpy(state->memory + 0x50, state->registers, 32);
+  for(int i = 0; i < numSamples; ++i) {
+    m3_CallV(state->snd, state->sampleIndex++);
+    m3_GetResultsV(state->snd, samples++);
+  }
+}
+
 int main(int argc, const char** argv) {
   if(argc != 2) {
     fprintf(stderr, "Usage: uw8-wasm3 <UW8-MODULE>\n");
@@ -216,7 +235,26 @@ int main(int argc, const char** argv) {
     assert(memory != NULL);
 
     IM3Function updFunc;
-    verifyM3(runtime.runtime, m3_FindFunction(&updFunc, runtime.runtime, "upd"));
+    bool hasUpdFunc = m3_FindFunction(&updFunc, runtime.runtime, "upd") == NULL;
+
+    AudioState audioState;
+    initRuntime(&audioState.runtime, env, platformWasm, platformSize, cartWasm, cartSize);
+    audioState.memory = m3_GetMemory(audioState.runtime.runtime, NULL, 0);
+    if(m3_FindFunction(&audioState.snd, audioState.runtime.runtime, "snd") != NULL) {
+      verifyM3(audioState.runtime.runtime, m3_FindFunction(&audioState.snd, audioState.runtime.runtime, "sndGes"));
+    }
+    memcpy(audioState.registers, audioState.memory + 0x50, 32);
+    audioState.sampleIndex = 0;
+
+    SDL_AudioSpec audioSpec;
+    audioSpec.freq = 44100;
+    audioSpec.format = AUDIO_F32SYS;
+    audioSpec.channels = 2;
+    audioSpec.samples = 256;
+    audioSpec.callback = audioCallback;
+    audioSpec.userdata = &audioState;
+    SDL_AudioDeviceID audioDevice = SDL_OpenAudioDevice(NULL, 0, &audioSpec, &audioSpec, 0);
+    SDL_PauseAudioDevice(audioDevice, 0);
 
     uint32_t startTime = SDL_GetTicks();
 
@@ -254,7 +292,10 @@ int main(int argc, const char** argv) {
       }
       memory[0x44] = buttons;
     
-      verifyM3(runtime.runtime, m3_CallV(updFunc));
+      if(hasUpdFunc) {
+        verifyM3(runtime.runtime, m3_CallV(updFunc));
+      }
+      memcpy(audioState.registers, memory + 0x50, 32);
 
       uint32_t* palette = (uint32_t*)(memory + 0x13000);
       uint8_t* pixels = memory + 120;
@@ -275,6 +316,8 @@ int main(int argc, const char** argv) {
       }
     }
 
+    SDL_CloseAudioDevice(audioDevice);
+    m3_FreeRuntime(audioState.runtime.runtime);
     m3_FreeRuntime(runtime.runtime);
   }
 

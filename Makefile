@@ -5,7 +5,7 @@ uw8-wasm3: main.o $(WASM3_O)
 	gcc -g -lm -lSDL2 -o uw8-wasm3 $^
 
 run: uw8-wasm3 .PHONY
-	./uw8-wasm3
+	./uw8-wasm3 never_sleeps.uw8
 
 run-ts:
 	deno run --allow-read main.ts
