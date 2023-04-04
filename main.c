@@ -1,5 +1,6 @@
 #include "wasm3/source/wasm3.h"
 #include "wasm3/source/m3_env.h"
+#include "platform.h"
 #include "SDL2/SDL.h"
 #include "SDL2/SDL_video.h"
 #include "SDL2/SDL_render.h"
@@ -20,6 +21,27 @@ void* loadFile(size_t* sizeOut, const char* filename) {
   *sizeOut = size;
   return buffer;
 }
+
+#define MATH1(name) \
+f32 Z_envZ_##name(struct Z_env_instance_t* i, f32 v) { \
+  return name##f(v); \
+}
+#define MATH2(name) \
+f32 Z_envZ_##name(struct Z_env_instance_t* i, f32 a, f32 b) { \
+  return name##f(a, b); \
+}
+MATH1(acos); MATH1(asin); MATH1(atan); MATH2(atan2);
+MATH1(cos); MATH1(sin); MATH1(tan);
+MATH1(exp); MATH2(pow);
+void Z_envZ_logChar(struct Z_env_instance_t* i, u32 c) {}
+
+u32 reservedGlobal;
+#define G_RESERVED(n) u32* Z_envZ_g_reserved##n(struct Z_env_instance_t* i) { return &reservedGlobal; }
+G_RESERVED(0); G_RESERVED(1); G_RESERVED(2); G_RESERVED(3);
+G_RESERVED(4); G_RESERVED(5); G_RESERVED(6); G_RESERVED(7);
+G_RESERVED(8); G_RESERVED(9); G_RESERVED(10); G_RESERVED(11);
+G_RESERVED(12); G_RESERVED(13); G_RESERVED(14); G_RESERVED(15);
+wasm_rt_memory_t* Z_envZ_memory(struct Z_env_instance_t* i) { return (wasm_rt_memory_t*)i; }
 
 void verifyM3(IM3Runtime runtime, M3Result result) {
   if (result != m3Err_none) {
@@ -86,6 +108,25 @@ m3ApiRawFunction(platformTrampoline) {
   m3ApiSuccess();
 }
 
+m3ApiRawFunction(callCircle) {
+  Z_platformZ_circle((Z_platform_instance_t*)_ctx->userdata, *(f32*)&_sp[0], *(f32*)&_sp[1], *(f32*)&_sp[2], _sp[3]);
+  m3ApiSuccess();
+}
+
+m3ApiRawFunction(callBlitSprite) {
+  Z_platformZ_blitSprite((Z_platform_instance_t*)_ctx->userdata, _sp[0], _sp[1], _sp[2], _sp[3], _sp[4]);
+  m3ApiSuccess();
+}
+
+struct {
+  const char* name;
+  const char* signature;
+  M3RawCall function;
+} cPlatformFunctions[] = {
+  { "circle", "v(fffi)", callCircle },
+  { "blitSprite", "v(iiiii)", callBlitSprite }
+};
+
 void appendType(char* signature, M3ValueType type) {
   if(type == c_m3Type_i32) {
     strcat(signature, "i");
@@ -99,24 +140,33 @@ void appendType(char* signature, M3ValueType type) {
   }
 }
 
-void linkPlatformFunctions(IM3Runtime runtime, IM3Module cartMod, IM3Module platformMod) {
+void linkPlatformFunctions(IM3Runtime runtime, IM3Module cartMod, IM3Module platformMod, Z_platform_instance_t* platformInstance) {
   for(u32 functionIndex = 0; functionIndex < platformMod->numFunctions; ++functionIndex) {
     M3Function function = platformMod->functions[functionIndex];
     if(function.export_name != NULL) {
-      IM3Function iFunc;
-      verifyM3(runtime, m3_FindFunction(&iFunc, runtime, function.export_name));
-      char signature[128] = { 0 };
-      if(m3_GetRetCount(iFunc) > 0) {
-        appendType(signature, m3_GetRetType(iFunc, 0));
-      } else {
-        strcat(signature, "v");
+      bool foundCImpl = false;
+      for(int i = 0; i * sizeof(cPlatformFunctions[0]) < sizeof(cPlatformFunctions); ++i) {
+        if(strcmp(function.export_name, cPlatformFunctions[i].name) == 0) {
+          m3_LinkRawFunctionEx(cartMod, "env", function.export_name, cPlatformFunctions[i].signature, cPlatformFunctions[i].function, platformInstance);
+          foundCImpl = true;
+        }
       }
-      strcat(signature, "(");
-      for(uint32_t i = 0; i < m3_GetArgCount(iFunc); ++i) {
-        appendType(signature, m3_GetArgType(iFunc, i));
+      if(!foundCImpl) {
+        IM3Function iFunc;
+        verifyM3(runtime, m3_FindFunction(&iFunc, runtime, function.export_name));
+        char signature[128] = { 0 };
+        if(m3_GetRetCount(iFunc) > 0) {
+          appendType(signature, m3_GetRetType(iFunc, 0));
+        } else {
+          strcat(signature, "v");
+        }
+        strcat(signature, "(");
+        for(uint32_t i = 0; i < m3_GetArgCount(iFunc); ++i) {
+          appendType(signature, m3_GetArgType(iFunc, i));
+        }
+        strcat(signature, ")");
+        m3_LinkRawFunctionEx(cartMod, "env", function.export_name, signature, platformTrampoline, iFunc);
       }
-      strcat(signature, ")");
-      m3_LinkRawFunctionEx(cartMod, "env", function.export_name, signature, platformTrampoline, iFunc);
     }
   }
 }
@@ -141,6 +191,8 @@ const uint32_t uw8buttonScanCodes[] = {
 typedef struct {
   IM3Runtime runtime;
   IM3Module platform;
+  wasm_rt_memory_t memory_c;
+  Z_platform_instance_t platform_c;
   IM3Module cart;
 } Uw8Runtime;
 
@@ -149,6 +201,12 @@ void initRuntime(Uw8Runtime* runtime, IM3Environment env,
   runtime->runtime = m3_NewRuntime(env, 65536, NULL);
   runtime->runtime->memory.maxPages = 4;
   verifyM3(runtime->runtime, ResizeMemory(runtime->runtime, 4));
+
+  runtime->memory_c.data = m3_GetMemory(runtime->runtime, NULL, 0);
+  runtime->memory_c.max_pages = 4;
+  runtime->memory_c.pages = 4;
+  runtime->memory_c.size = 256*1024;
+  Z_platform_instantiate(&runtime->platform_c, (struct Z_env_instance_t*)&runtime->memory_c);
 
   verifyM3(runtime->runtime, m3_ParseModule(env, &runtime->platform, platform, platformSize));
   runtime->platform->memoryImported = true;
@@ -161,7 +219,7 @@ void initRuntime(Uw8Runtime* runtime, IM3Environment env,
   runtime->platform->memoryImported = true;
   verifyM3(runtime->runtime, m3_LoadModule(runtime->runtime, runtime->cart));
   linkSystemFunctions(runtime->runtime, runtime->cart);
-  linkPlatformFunctions(runtime->runtime, runtime->cart, runtime->platform);
+  linkPlatformFunctions(runtime->runtime, runtime->cart, runtime->platform, &runtime->platform_c);
   verifyM3(runtime->runtime, m3_CompileModule(runtime->cart));
   verifyM3(runtime->runtime, m3_RunStart(runtime->cart));
 }
@@ -225,6 +283,9 @@ int main(int argc, const char** argv) {
   void* cartWasm = loadUw8(&cartSize, loaderRuntime, loadFunc, argv[1]);
 
   m3_FreeRuntime(loaderRuntime);
+
+  wasm_rt_init();
+  Z_platform_init_module();
 
   bool quit = false;
   while(!quit) {
