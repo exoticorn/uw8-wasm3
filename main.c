@@ -92,19 +92,23 @@ void linkSystemFunctions(IM3Runtime runtime, IM3Module mod) {
   }
 }
 
-m3ApiRawFunction(platformTrampoline) {
-  IM3Function func = (IM3Function)_ctx->userdata;
-  uint32_t retCount = m3_GetRetCount(func);
-  uint32_t argCount = m3_GetArgCount(func);
-  const void* args[16];
-  for(uint32_t i = 0; i < argCount; ++i) {
-    args[i] = &_sp[retCount + i];
-  }
-  verifyM3(runtime, m3_Call(func, m3_GetArgCount(func), args));
-  for(uint32_t i = 0; i < retCount; ++i) {
-    args[i] = &_sp[i];
-  }
-  verifyM3(runtime, m3_GetResults(func, retCount, args));
+m3ApiRawFunction(callRandom) {
+  _sp[0] = Z_platformZ_random((Z_platform_instance_t*)_ctx->userdata);
+  m3ApiSuccess();
+}
+
+m3ApiRawFunction(callRandomf) {
+  *(f32*)&_sp[0] = Z_platformZ_randomf((Z_platform_instance_t*)_ctx->userdata);
+  m3ApiSuccess();
+}
+
+m3ApiRawFunction(callRandomSeed) {
+  Z_platformZ_randomSeed((Z_platform_instance_t*)_ctx->userdata, _sp[0]);
+  m3ApiSuccess();
+}
+
+m3ApiRawFunction(callCls) {
+  Z_platformZ_cls((Z_platform_instance_t*)_ctx->userdata, _sp[0]);
   m3ApiSuccess();
 }
 
@@ -118,56 +122,76 @@ m3ApiRawFunction(callBlitSprite) {
   m3ApiSuccess();
 }
 
+m3ApiRawFunction(callGrabSprite) {
+  Z_platformZ_grabSprite((Z_platform_instance_t*)_ctx->userdata, _sp[0], _sp[1], _sp[2], _sp[3], _sp[4]);
+  m3ApiSuccess();
+}
+
+m3ApiRawFunction(callTime) {
+  *(f32*)&_sp[0] = Z_platformZ_time((Z_platform_instance_t*)_ctx->userdata);
+  m3ApiSuccess();
+}
+
+m3ApiRawFunction(callPrintChar) {
+  Z_platformZ_printChar((Z_platform_instance_t*)_ctx->userdata, _sp[0]);
+  m3ApiSuccess();
+}
+
+m3ApiRawFunction(callPrintString) {
+  Z_platformZ_printString((Z_platform_instance_t*)_ctx->userdata, _sp[0]);
+  m3ApiSuccess();
+}
+
+m3ApiRawFunction(callPrintInt) {
+  Z_platformZ_printInt((Z_platform_instance_t*)_ctx->userdata, _sp[0]);
+  m3ApiSuccess();
+}
+
+m3ApiRawFunction(callSetTextColor) {
+  Z_platformZ_setTextColor((Z_platform_instance_t*)_ctx->userdata, _sp[0]);
+  m3ApiSuccess();
+}
+
+m3ApiRawFunction(callSetBackgroundColor) {
+  Z_platformZ_setBackgroundColor((Z_platform_instance_t*)_ctx->userdata, _sp[0]);
+  m3ApiSuccess();
+}
+
+m3ApiRawFunction(callSetCursorPosition) {
+  Z_platformZ_setCursorPosition((Z_platform_instance_t*)_ctx->userdata, _sp[0], _sp[1]);
+  m3ApiSuccess();
+}
+
+m3ApiRawFunction(callSndGes) {
+  *(f32*)&_sp[0] = Z_platformZ_sndGes((Z_platform_instance_t*)_ctx->userdata, _sp[0]);
+  m3ApiSuccess();
+}
+
 struct {
   const char* name;
   const char* signature;
   M3RawCall function;
 } cPlatformFunctions[] = {
+  { "random", "i()", callRandom },
+  { "randomf", "f()", callRandomf },
+  { "randomSeed", "v(i)", callRandomSeed },
+  { "cls", "v(i)", callCls },
   { "circle", "v(fffi)", callCircle },
-  { "blitSprite", "v(iiiii)", callBlitSprite }
+  { "blitSprite", "v(iiiii)", callBlitSprite },
+  { "grabSprite", "v(iiiii)", callGrabSprite },
+  { "time", "f()", callTime },
+  { "printChar", "v(i)", callPrintChar },
+  { "printString", "v(i)", callPrintString },
+  { "printInt", "v(i)", callPrintInt },
+  { "setTextColor", "v(i)", callSetTextColor },
+  { "setBackgroundColor", "v(i)", callSetBackgroundColor },
+  { "setCursorPosition", "v(ii)", callSetCursorPosition },
+  { "sndGes", "f(i)", callSndGes },
 };
 
-void appendType(char* signature, M3ValueType type) {
-  if(type == c_m3Type_i32) {
-    strcat(signature, "i");
-  } else if(type == c_m3Type_i64) {
-    strcat(signature, "l");
-  } else if(type == c_m3Type_f32) {
-    strcat(signature, "f");
-  } else {
-    fprintf(stderr, "Unsupported platform type %d\n", type);
-    exit(1);
-  }
-}
-
-void linkPlatformFunctions(IM3Runtime runtime, IM3Module cartMod, IM3Module platformMod, Z_platform_instance_t* platformInstance) {
-  for(u32 functionIndex = 0; functionIndex < platformMod->numFunctions; ++functionIndex) {
-    M3Function function = platformMod->functions[functionIndex];
-    if(function.export_name != NULL) {
-      bool foundCImpl = false;
-      for(int i = 0; i * sizeof(cPlatformFunctions[0]) < sizeof(cPlatformFunctions); ++i) {
-        if(strcmp(function.export_name, cPlatformFunctions[i].name) == 0) {
-          m3_LinkRawFunctionEx(cartMod, "env", function.export_name, cPlatformFunctions[i].signature, cPlatformFunctions[i].function, platformInstance);
-          foundCImpl = true;
-        }
-      }
-      if(!foundCImpl) {
-        IM3Function iFunc;
-        verifyM3(runtime, m3_FindFunction(&iFunc, runtime, function.export_name));
-        char signature[128] = { 0 };
-        if(m3_GetRetCount(iFunc) > 0) {
-          appendType(signature, m3_GetRetType(iFunc, 0));
-        } else {
-          strcat(signature, "v");
-        }
-        strcat(signature, "(");
-        for(uint32_t i = 0; i < m3_GetArgCount(iFunc); ++i) {
-          appendType(signature, m3_GetArgType(iFunc, i));
-        }
-        strcat(signature, ")");
-        m3_LinkRawFunctionEx(cartMod, "env", function.export_name, signature, platformTrampoline, iFunc);
-      }
-    }
+void linkPlatformFunctions(IM3Runtime runtime, IM3Module cartMod, Z_platform_instance_t* platformInstance) {
+  for(int i = 0; i * sizeof(cPlatformFunctions[0]) < sizeof(cPlatformFunctions); ++i) {
+    m3_LinkRawFunctionEx(cartMod, "env", cPlatformFunctions[i].name, cPlatformFunctions[i].signature, cPlatformFunctions[i].function, platformInstance);
   }
 }
 
@@ -190,14 +214,13 @@ const uint32_t uw8buttonScanCodes[] = {
 
 typedef struct {
   IM3Runtime runtime;
-  IM3Module platform;
   wasm_rt_memory_t memory_c;
   Z_platform_instance_t platform_c;
   IM3Module cart;
 } Uw8Runtime;
 
 void initRuntime(Uw8Runtime* runtime, IM3Environment env,
-                 void* platform, size_t platformSize, void* cart, size_t cartSize) {
+                 void* cart, size_t cartSize) {
   runtime->runtime = m3_NewRuntime(env, 65536, NULL);
   runtime->runtime->memory.maxPages = 4;
   verifyM3(runtime->runtime, ResizeMemory(runtime->runtime, 4));
@@ -208,18 +231,11 @@ void initRuntime(Uw8Runtime* runtime, IM3Environment env,
   runtime->memory_c.size = 256*1024;
   Z_platform_instantiate(&runtime->platform_c, (struct Z_env_instance_t*)&runtime->memory_c);
 
-  verifyM3(runtime->runtime, m3_ParseModule(env, &runtime->platform, platform, platformSize));
-  runtime->platform->memoryImported = true;
-  verifyM3(runtime->runtime, m3_LoadModule(runtime->runtime, runtime->platform));
-  linkSystemFunctions(runtime->runtime, runtime->platform);
-  verifyM3(runtime->runtime, m3_CompileModule(runtime->platform));
-  verifyM3(runtime->runtime, m3_RunStart(runtime->platform));
-
   verifyM3(runtime->runtime, m3_ParseModule(env, &runtime->cart, cart, cartSize));
-  runtime->platform->memoryImported = true;
+  runtime->cart->memoryImported = true;
   verifyM3(runtime->runtime, m3_LoadModule(runtime->runtime, runtime->cart));
   linkSystemFunctions(runtime->runtime, runtime->cart);
-  linkPlatformFunctions(runtime->runtime, runtime->cart, runtime->platform, &runtime->platform_c);
+  linkPlatformFunctions(runtime->runtime, runtime->cart, &runtime->platform_c);
   verifyM3(runtime->runtime, m3_CompileModule(runtime->cart));
   verifyM3(runtime->runtime, m3_RunStart(runtime->cart));
 }
@@ -228,6 +244,7 @@ typedef struct AudioState {
   Uw8Runtime runtime;
   uint8_t* memory;
   IM3Function snd;
+  bool hasSnd;
   uint8_t registers[32];
   uint32_t sampleIndex;
 } AudioState;
@@ -238,8 +255,12 @@ void audioCallback(void* userdata, Uint8* stream, int len) {
   int numSamples = len / sizeof(float);
   memcpy(state->memory + 0x50, state->registers, 32);
   for(int i = 0; i < numSamples; ++i) {
-    m3_CallV(state->snd, state->sampleIndex++);
-    m3_GetResultsV(state->snd, samples++);
+    if(state->hasSnd) {
+      m3_CallV(state->snd, state->sampleIndex++);
+      m3_GetResultsV(state->snd, samples++);
+    } else {
+      Z_platformZ_sndGes(&state->runtime.platform_c, state->sampleIndex++);
+    }
   }
 }
 
@@ -276,9 +297,6 @@ int main(int argc, const char** argv) {
   IM3Function loadFunc;
   verifyM3(loaderRuntime, m3_FindFunction(&loadFunc, loaderRuntime, "load_uw8"));
 
-  uint32_t platformSize;
-  void* platformWasm = loadUw8(&platformSize, loaderRuntime, loadFunc, "platform.uw8");
-
   uint32_t cartSize;
   void* cartWasm = loadUw8(&cartSize, loaderRuntime, loadFunc, argv[1]);
 
@@ -290,7 +308,7 @@ int main(int argc, const char** argv) {
   bool quit = false;
   while(!quit) {
     Uw8Runtime runtime;
-    initRuntime(&runtime, env, platformWasm, platformSize, cartWasm, cartSize);
+    initRuntime(&runtime, env, cartWasm, cartSize);
 
     uint8_t* memory = m3_GetMemory(runtime.runtime, NULL, 0);
     assert(memory != NULL);
@@ -299,11 +317,9 @@ int main(int argc, const char** argv) {
     bool hasUpdFunc = m3_FindFunction(&updFunc, runtime.runtime, "upd") == NULL;
 
     AudioState audioState;
-    initRuntime(&audioState.runtime, env, platformWasm, platformSize, cartWasm, cartSize);
+    initRuntime(&audioState.runtime, env, cartWasm, cartSize);
     audioState.memory = m3_GetMemory(audioState.runtime.runtime, NULL, 0);
-    if(m3_FindFunction(&audioState.snd, audioState.runtime.runtime, "snd") != NULL) {
-      verifyM3(audioState.runtime.runtime, m3_FindFunction(&audioState.snd, audioState.runtime.runtime, "sndGes"));
-    }
+    audioState.hasSnd = m3_FindFunction(&audioState.snd, audioState.runtime.runtime, "snd") == NULL;
     memcpy(audioState.registers, audioState.memory + 0x50, 32);
     audioState.sampleIndex = 0;
 
