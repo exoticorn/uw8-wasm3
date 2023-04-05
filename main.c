@@ -92,6 +92,11 @@ void linkSystemFunctions(IM3Runtime runtime, IM3Module mod) {
   }
 }
 
+m3ApiRawFunction(callFmod) {
+  *(f32*)&_sp[0] = Z_platformZ_fmod((Z_platform_instance_t*)_ctx->userdata, *(f32*)&_sp[1], *(f32*)&_sp[2]);
+  m3ApiSuccess();
+}
+
 m3ApiRawFunction(callRandom) {
   _sp[0] = Z_platformZ_random((Z_platform_instance_t*)_ctx->userdata);
   m3ApiSuccess();
@@ -112,8 +117,43 @@ m3ApiRawFunction(callCls) {
   m3ApiSuccess();
 }
 
+m3ApiRawFunction(callSetPixel) {
+  Z_platformZ_setPixel((Z_platform_instance_t*)_ctx->userdata, _sp[0], _sp[1], _sp[2]);
+  m3ApiSuccess();
+}
+
+m3ApiRawFunction(callGetPixel) {
+  _sp[0] = Z_platformZ_getPixel((Z_platform_instance_t*)_ctx->userdata, _sp[1], _sp[2]);
+  m3ApiSuccess();
+}
+
+m3ApiRawFunction(callHline) {
+  Z_platformZ_hline((Z_platform_instance_t*)_ctx->userdata, _sp[0], _sp[1], _sp[2], _sp[3]);
+  m3ApiSuccess();
+}
+
+m3ApiRawFunction(callRectangle) {
+  Z_platformZ_rectangle((Z_platform_instance_t*)_ctx->userdata, *(f32*)&_sp[0], *(f32*)&_sp[1], *(f32*)&_sp[2], *(f32*)&_sp[3],_sp[4]);
+  m3ApiSuccess();
+}
+
 m3ApiRawFunction(callCircle) {
   Z_platformZ_circle((Z_platform_instance_t*)_ctx->userdata, *(f32*)&_sp[0], *(f32*)&_sp[1], *(f32*)&_sp[2], _sp[3]);
+  m3ApiSuccess();
+}
+
+m3ApiRawFunction(callRectangleOutline) {
+  Z_platformZ_rectangleOutline((Z_platform_instance_t*)_ctx->userdata, *(f32*)&_sp[0], *(f32*)&_sp[1], *(f32*)&_sp[2], *(f32*)&_sp[3],_sp[4]);
+  m3ApiSuccess();
+}
+
+m3ApiRawFunction(callCircleOutline) {
+  Z_platformZ_circleOutline((Z_platform_instance_t*)_ctx->userdata, *(f32*)&_sp[0], *(f32*)&_sp[1], *(f32*)&_sp[2], _sp[3]);
+  m3ApiSuccess();
+}
+
+m3ApiRawFunction(callLine) {
+  Z_platformZ_line((Z_platform_instance_t*)_ctx->userdata, *(f32*)&_sp[0], *(f32*)&_sp[1], *(f32*)&_sp[2], *(f32*)&_sp[3],_sp[4]);
   m3ApiSuccess();
 }
 
@@ -124,6 +164,16 @@ m3ApiRawFunction(callBlitSprite) {
 
 m3ApiRawFunction(callGrabSprite) {
   Z_platformZ_grabSprite((Z_platform_instance_t*)_ctx->userdata, _sp[0], _sp[1], _sp[2], _sp[3], _sp[4]);
+  m3ApiSuccess();
+}
+
+m3ApiRawFunction(callIsButtonPressed) {
+  _sp[0] = Z_platformZ_isButtonPressed((Z_platform_instance_t*)_ctx->userdata, _sp[1]);
+  m3ApiSuccess();
+}
+
+m3ApiRawFunction(callIsButtonTriggered) {
+  _sp[0] = Z_platformZ_isButtonTriggered((Z_platform_instance_t*)_ctx->userdata, _sp[1]);
   m3ApiSuccess();
 }
 
@@ -163,7 +213,12 @@ m3ApiRawFunction(callSetCursorPosition) {
 }
 
 m3ApiRawFunction(callSndGes) {
-  *(f32*)&_sp[0] = Z_platformZ_sndGes((Z_platform_instance_t*)_ctx->userdata, _sp[0]);
+  *(f32*)&_sp[0] = Z_platformZ_sndGes((Z_platform_instance_t*)_ctx->userdata, _sp[1]);
+  m3ApiSuccess();
+}
+
+m3ApiRawFunction(callPlayNote) {
+  Z_platformZ_playNote((Z_platform_instance_t*)_ctx->userdata, _sp[0], _sp[1]);
   m3ApiSuccess();
 }
 
@@ -172,13 +227,23 @@ struct {
   const char* signature;
   M3RawCall function;
 } cPlatformFunctions[] = {
+  { "fmod", "f(ff)", callFmod },
   { "random", "i()", callRandom },
   { "randomf", "f()", callRandomf },
   { "randomSeed", "v(i)", callRandomSeed },
   { "cls", "v(i)", callCls },
+  { "setPixel", "v(iii)", callSetPixel },
+  { "getPidel", "i(ii)", callGetPixel },
+  { "hline", "v(iiii)", callHline },
+  { "rectangle", "v(ffffi)", callRectangle },
   { "circle", "v(fffi)", callCircle },
+  { "rectangleOutline", "v(ffffi)", callRectangleOutline },
+  { "circleOutline", "v(fffi)", callCircleOutline },
+  { "line", "v(ffffi)", callLine },
   { "blitSprite", "v(iiiii)", callBlitSprite },
   { "grabSprite", "v(iiiii)", callGrabSprite },
+  { "isButtonPressed", "i(i)", callIsButtonPressed },
+  { "isButtonTriggered", "i(i)", callIsButtonTriggered},
   { "time", "f()", callTime },
   { "printChar", "v(i)", callPrintChar },
   { "printString", "v(i)", callPrintString },
@@ -186,7 +251,8 @@ struct {
   { "setTextColor", "v(i)", callSetTextColor },
   { "setBackgroundColor", "v(i)", callSetBackgroundColor },
   { "setCursorPosition", "v(ii)", callSetCursorPosition },
-  { "sndGes", "f(i)", callSndGes },
+  { "playNote", "v(ii)", callPlayNote },
+  { "sndGes", "f(i)", callSndGes }
 };
 
 void linkPlatformFunctions(IM3Runtime runtime, IM3Module cartMod, Z_platform_instance_t* platformInstance) {
@@ -259,7 +325,7 @@ void audioCallback(void* userdata, Uint8* stream, int len) {
       m3_CallV(state->snd, state->sampleIndex++);
       m3_GetResultsV(state->snd, samples++);
     } else {
-      Z_platformZ_sndGes(&state->runtime.platform_c, state->sampleIndex++);
+      *samples++ = Z_platformZ_sndGes(&state->runtime.platform_c, state->sampleIndex++);
     }
   }
 }
@@ -373,6 +439,8 @@ int main(int argc, const char** argv) {
         verifyM3(runtime.runtime, m3_CallV(updFunc));
       }
       memcpy(audioState.registers, memory + 0x50, 32);
+
+      Z_platformZ_endFrame(&runtime.platform_c);
 
       uint32_t* palette = (uint32_t*)(memory + 0x13000);
       uint8_t* pixels = memory + 120;
