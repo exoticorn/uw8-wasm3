@@ -1,5 +1,6 @@
 #include "wasm3/source/wasm3.h"
 #include "wasm3/source/m3_env.h"
+#include "loader.h"
 #include "platform.h"
 #include "SDL2/SDL.h"
 #include "SDL2/SDL_video.h"
@@ -261,15 +262,21 @@ void linkPlatformFunctions(IM3Runtime runtime, IM3Module cartMod, Z_platform_ins
   }
 }
 
-void* loadUw8(uint32_t* sizeOut, IM3Runtime runtime, IM3Function loadFunc, const char* filename) {
+void* loadUw8(uint32_t* sizeOut, IM3Runtime runtime, const char* filename) {
   size_t uw8Size;
   void* uw8 = loadFile(&uw8Size, filename);
-  uint8_t* memory = m3_GetMemory(runtime, NULL, 0);
-  memcpy(memory, uw8, uw8Size);
-  verifyM3(runtime, m3_CallV(loadFunc, (uint32_t)uw8Size));
-  verifyM3(runtime, m3_GetResultsV(loadFunc, sizeOut));
+
+  wasm_rt_memory_t memory;
+  memory.data = m3_GetMemory(runtime, NULL, 0);
+  memory.max_pages = memory.pages = 4;
+  memory.size = 4 * 65536;
+  Z_loader_instance_t loader;
+  Z_loader_instantiate(&loader, (struct Z_env_instance_t*)&memory);
+  
+  memcpy(memory.data, uw8, uw8Size);
+  *sizeOut = Z_loaderZ_load_uw8(&loader, (uint32_t)uw8Size);
   void* wasm = malloc(*sizeOut);
-  memcpy(wasm, memory, *sizeOut);
+  memcpy(wasm, memory.data, *sizeOut);
   return wasm;
 }
 
@@ -345,31 +352,19 @@ int main(int argc, const char** argv) {
 
   uint32_t* pixels32 = malloc(320*240*4);
 
+  wasm_rt_init();
+  Z_loader_init_module();
+  Z_platform_init_module();
+
   IM3Environment env = m3_NewEnvironment();
   IM3Runtime loaderRuntime = m3_NewRuntime(env, 65536, NULL);
   loaderRuntime->memory.maxPages = 4;
   verifyM3(loaderRuntime, ResizeMemory(loaderRuntime, 4));
 
-  size_t loaderSize;
-  void* loaderWasm = loadFile(&loaderSize, "loader.wasm");
-
-  IM3Module loaderMod;
-  verifyM3(loaderRuntime, m3_ParseModule(env, &loaderMod, loaderWasm, loaderSize));
-  loaderMod->memoryImported = true;
-  verifyM3(loaderRuntime, m3_LoadModule(loaderRuntime, loaderMod));
-  verifyM3(loaderRuntime, m3_CompileModule(loaderMod));
-  verifyM3(loaderRuntime, m3_RunStart(loaderMod));
-
-  IM3Function loadFunc;
-  verifyM3(loaderRuntime, m3_FindFunction(&loadFunc, loaderRuntime, "load_uw8"));
-
   uint32_t cartSize;
-  void* cartWasm = loadUw8(&cartSize, loaderRuntime, loadFunc, argv[1]);
+  void* cartWasm = loadUw8(&cartSize, loaderRuntime, argv[1]);
 
   m3_FreeRuntime(loaderRuntime);
-
-  wasm_rt_init();
-  Z_platform_init_module();
 
   bool quit = false;
   while(!quit) {
