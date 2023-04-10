@@ -374,6 +374,11 @@ int main(int argc, const char** argv) {
     uint8_t* memory = m3_GetMemory(runtime.runtime, NULL, 0);
     assert(memory != NULL);
 
+    IM3Function startFunc;
+    if(m3_FindFunction(&startFunc, runtime.runtime, "start") == NULL) {
+      verifyM3(runtime.runtime, m3_CallV(startFunc));
+    }
+
     IM3Function updFunc;
     bool hasUpdFunc = m3_FindFunction(&updFunc, runtime.runtime, "upd") == NULL;
 
